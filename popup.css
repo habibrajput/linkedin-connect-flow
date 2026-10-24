@@ -1,0 +1,103 @@
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+  width: 260px;
+  padding: 14px;
+  margin: 0;
+  background: #1e1e2a;
+  color: #eaeaea;
+  font-size: 12px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+h1 { font-size: 14px; margin: 0; }
+
+.pill {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.pill.idle    { background: #444; color: #ccc; }
+.pill.running { background: #2e7d32; color: #fff; }
+.pill.cooling { background: #b8860b; color: #fff; }
+.pill.stopped { background: #555; color: #ddd; }
+.pill.cap     { background: #c62828; color: #fff; }
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+button {
+  flex: 1;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #fff;
+}
+.primary { background: #2e7d32; }
+.primary:hover { background: #256428; }
+.danger { background: #c62828; }
+.danger:hover { background: #a01f1f; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.cooldown {
+  background: #2a2a3a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cooldown-label { color: #b8860b; font-weight: 600; }
+.cooldown-time { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; }
+.hidden { display: none; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.stat {
+  background: #2a2a3a;
+  border-radius: 6px;
+  padding: 8px 6px;
+  text-align: center;
+}
+.stat-value { font-size: 16px; font-weight: 700; }
+.stat-label { font-size: 10px; color: #9a9ab0; margin-top: 2px; }
+
+.breakdown {
+  background: #2a2a3a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.breakdown .row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  color: #cfcfe0;
+}
+.breakdown .row span:last-child { font-weight: 700; }
+
+.last-action {
+  background: #2a2a3a;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.last-action .label { font-size: 10px; color: #9a9ab0; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+#last-action-text { color: #cfcfe0; word-break: break-word; }

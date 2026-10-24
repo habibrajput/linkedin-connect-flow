@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Connect Flow",
+  "version": "1.1.0",
+  "description": "Step-wise LinkedIn connection sender with rate limiting and personalized notes.",
+  "permissions": ["storage", "scripting", "activeTab"],
+  "host_permissions": ["https://www.linkedin.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Connect Flow"
+  }
+}

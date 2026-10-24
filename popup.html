@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <h1>Connect Flow</h1>
+    <span id="status-pill" class="pill idle">Idle</span>
+  </header>
+
+  <div class="buttons">
+    <button id="start" class="primary">▶ Start</button>
+    <button id="stop" class="danger">■ Stop</button>
+  </div>
+
+  <div id="cooldown-bar" class="cooldown hidden">
+    <div class="cooldown-label">Cooling down…</div>
+    <div class="cooldown-time" id="cooldown-time">--s</div>
+  </div>
+
+  <section class="stats">
+    <div class="stat">
+      <div class="stat-value" id="today-count">0</div>
+      <div class="stat-label">Today</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="cap">35</div>
+      <div class="stat-label">Daily cap</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="total-sent">0</div>
+      <div class="stat-label">All-time</div>
+    </div>
+  </section>
+
+  <section class="breakdown">
+    <div class="row"><span>With note</span><span id="total-notes">0</span></div>
+    <div class="row"><span>Blank send</span><span id="total-blank">0</span></div>
+    <div class="row"><span>Skipped</span><span id="total-skipped">0</span></div>
+  </section>
+
+  <section class="last-action">
+    <div class="label">Last action</div>
+    <div id="last-action-text">—</div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
