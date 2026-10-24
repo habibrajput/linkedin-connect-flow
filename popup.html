@@ -1,50 +1,162 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <header>
-    <h1>Connect Flow</h1>
-    <span id="status-pill" class="pill idle">Idle</span>
-  </header>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="2" y="9" width="4" height="12" rx="1" stroke="currentColor" stroke-width="2"/>
+            <circle cx="4" cy="4" r="2" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1>Connect Flow</h1>
+          <span class="brand-sub">LinkedIn automation</span>
+        </div>
+      </div>
+      <span id="status-pill" class="pill idle">
+        <span class="pill-dot"></span>
+        <span class="pill-label">Idle</span>
+      </span>
+      <button id="settings-toggle" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>
+    </header>
 
-  <div class="buttons">
-    <button id="start" class="primary">▶ Start</button>
-    <button id="stop" class="danger">■ Stop</button>
+    <section class="usage">
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 80 80" aria-hidden="true">
+          <defs>
+            <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#18181b" />
+              <stop offset="100%" stop-color="#3f3f46" />
+            </linearGradient>
+          </defs>
+          <circle class="ring-track" cx="40" cy="40" r="34" />
+          <circle id="ring-progress" class="ring-progress" cx="40" cy="40" r="34" />
+        </svg>
+        <div class="ring-center">
+          <div class="ring-value" id="today-count">0</div>
+          <div class="ring-label">of <span id="cap">35</span></div>
+        </div>
+      </div>
+      <div class="usage-meta">
+        <div class="usage-title">Daily progress</div>
+        <div class="usage-sub" id="usage-sub">0 connections sent today</div>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <div class="usage-stats">
+          <div class="mini-stat">
+            <span class="mini-value" id="total-sent">0</span>
+            <span class="mini-label">All-time</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-value" id="remaining-count">35</span>
+            <span class="mini-label">Remaining</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="buttons">
+      <button id="start" class="btn btn-start">
+        <span class="btn-icon">&#9654;</span>
+        <span>Start</span>
+      </button>
+      <button id="stop" class="btn btn-stop" disabled>
+        <span class="btn-icon">&#9632;</span>
+        <span>Stop</span>
+      </button>
+    </div>
+
+    <div id="cooldown-bar" class="cooldown hidden">
+      <div class="cooldown-left">
+        <span class="cooldown-icon">&#8987;</span>
+        <div>
+          <div class="cooldown-label">Cooling down</div>
+          <div class="cooldown-sub">Rate limit protection</div>
+        </div>
+      </div>
+      <div class="cooldown-time" id="cooldown-time">--s</div>
+    </div>
+
+    <section class="card breakdown">
+      <div class="card-title">Breakdown</div>
+      <div class="row">
+        <span class="row-label"><span class="dot dot-note"></span>With note</span>
+        <span class="row-value" id="total-notes">0</span>
+      </div>
+      <div class="row">
+        <span class="row-label"><span class="dot dot-blank"></span>Blank send</span>
+        <span class="row-value" id="total-blank">0</span>
+      </div>
+      <div class="row">
+        <span class="row-label"><span class="dot dot-skip"></span>Skipped</span>
+        <span class="row-value" id="total-skipped">0</span>
+      </div>
+    </section>
+
+    <details class="card last-action accordion">
+      <summary class="card-title accordion-summary">
+        <span>Last actions</span>
+        <span class="chevron">▾</span>
+      </summary>
+      <div id="last-action-list" class="last-action-list"></div>
+    </details>
+
+    <div id="settings-overlay" class="settings-overlay hidden">
+      <div class="settings-overlay-header">
+        <span class="settings-overlay-title">⚙ Settings</span>
+        <button id="settings-close" class="icon-btn" title="Back" aria-label="Back">←</button>
+      </div>
+      <div class="settings-overlay-body">
+        <label class="field">
+          <span class="field-label">Connection note</span>
+          <textarea id="note-input" rows="4" maxlength="300" placeholder="Your personalized note..."></textarea>
+          <div class="field-hint">Macros: {firstName}, {lastName}, {name}</div>
+          <span class="field-hint"><span id="note-count">0</span>/300 characters</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Daily cap</span>
+          <input id="cap-input" type="number" min="1" max="100" />
+        </label>
+        <div class="settings-actions">
+          <button id="save-settings" class="btn btn-secondary btn-sm">Save settings</button>
+          <button id="reset-stats" class="btn btn-ghost btn-sm">Reset all data</button>
+        </div>
+        <div id="settings-status" class="settings-status"></div>
+
+        <details class="tips" open>
+          <summary class="settings-summary">
+            <span>🛡 Safety tips</span>
+            <span class="chevron">▾</span>
+          </summary>
+          <div class="tips-body">
+            <ul>
+              <li>Keep daily sends under 25–35; LinkedIn flags mass activity.</li>
+              <li>Use personalized notes; avoid identical spammy text.</li>
+              <li>Run only during business hours; avoid 24/7 automation.</li>
+              <li>Take breaks; don't run on brand-new accounts.</li>
+              <li>Warm up gradually; increase volume over weeks.</li>
+              <li>Respect LinkedIn's terms; risk of temporary restriction.</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span>Connect Flow v1.1.0</span>
+      <span class="footer-dot">&bull;</span>
+      <span>LinkedIn</span>
+    </footer>
   </div>
-
-  <div id="cooldown-bar" class="cooldown hidden">
-    <div class="cooldown-label">Cooling down…</div>
-    <div class="cooldown-time" id="cooldown-time">--s</div>
-  </div>
-
-  <section class="stats">
-    <div class="stat">
-      <div class="stat-value" id="today-count">0</div>
-      <div class="stat-label">Today</div>
-    </div>
-    <div class="stat">
-      <div class="stat-value" id="cap">35</div>
-      <div class="stat-label">Daily cap</div>
-    </div>
-    <div class="stat">
-      <div class="stat-value" id="total-sent">0</div>
-      <div class="stat-label">All-time</div>
-    </div>
-  </section>
-
-  <section class="breakdown">
-    <div class="row"><span>With note</span><span id="total-notes">0</span></div>
-    <div class="row"><span>Blank send</span><span id="total-blank">0</span></div>
-    <div class="row"><span>Skipped</span><span id="total-skipped">0</span></div>
-  </section>
-
-  <section class="last-action">
-    <div class="label">Last action</div>
-    <div id="last-action-text">—</div>
-  </section>
 
   <script src="popup.js"></script>
 </body>

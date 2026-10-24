@@ -74,7 +74,8 @@ function fireClick(el) {
 const DEFAULT_STATE = {
   status: "idle",          // idle | running | cooling | stopped | cap
   cooldownUntil: 0,
-  lastAction: null,        // { ts, result, name }
+  lastAction: null,        // { ts, result, name } (legacy)
+  lastActions: [],         // array of { ts, result, name }, max 6
   totalSent: 0,
   totalNotes: 0,
   totalBlank: 0,
@@ -83,12 +84,25 @@ const DEFAULT_STATE = {
 
 async function loadState() {
   const { flowState } = await chrome.storage.local.get("flowState");
-  return { ...DEFAULT_STATE, ...(flowState || {}) };
+  const base = { ...DEFAULT_STATE, ...(flowState || {}) };
+  if ((!base.lastActions || !base.lastActions.length) && base.lastAction) {
+    base.lastActions = [base.lastAction];
+  }
+  if (!Array.isArray(base.lastActions)) base.lastActions = [];
+  base.lastActions = base.lastActions.slice(-6);
+  return base;
 }
 
 async function saveState(patch) {
   const current = await loadState();
   const next = { ...current, ...patch };
+  if (patch && patch.lastAction) {
+    const arr = Array.isArray(current.lastActions) ? [...current.lastActions] : [];
+    arr.push(patch.lastAction);
+    next.lastActions = arr.slice(-6);
+  }
+  if (!Array.isArray(next.lastActions)) next.lastActions = [];
+  next.lastActions = next.lastActions.slice(-6);
   await chrome.storage.local.set({ flowState: next });
   try {
     chrome.runtime.sendMessage({ action: "FLOW_STATE_UPDATE", state: next });
@@ -106,13 +120,19 @@ class ConnectionFlow {
     this.dailyCount = 0;
     this.dailyDate = "";
     this._skips = 0;
+    this.dailyCap = CONFIG.DAILY_CAP;
+    this.noteMessage = NOTE_MESSAGE;
   }
 
   async init() {
-    const data = await chrome.storage.local.get(["actionHistory", "dailyCount", "dailyDate"]);
+    const data = await chrome.storage.local.get(["actionHistory", "dailyCount", "dailyDate", "settings"]);
     this.history = data.actionHistory || [];
     this.dailyDate = data.dailyDate || "";
     this.dailyCount = data.dailyCount || 0;
+    if (data.settings) {
+      if (data.settings.dailyCap) this.dailyCap = data.settings.dailyCap;
+      if (data.settings.noteMessage) this.noteMessage = data.settings.noteMessage;
+    }
 
     const today = new Date().toDateString();
     if (this.dailyDate !== today) {
@@ -207,7 +227,18 @@ class ConnectionFlow {
     return true;
   }
 
-  async typeNoteAndSend() {
+  async typeNoteAndSend(name = null) {
+    // Resolve macros in the note template
+    const fullName = (name || '').trim();
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    const firstName = parts[0] || '';
+    const lastName = parts.slice(1).join(' ') || '';
+    let message = this.noteMessage || '';
+    message = message
+      .replace(/\{firstName\}|\{first\}/gi, firstName)
+      .replace(/\{lastName\}|\{last\}/gi, lastName)
+      .replace(/\{name\}|\{fullName\}/gi, fullName);
+    this._resolvedNote = message;
     let textarea = null;
     for (let i = 0; i < 15; i++) {
       textarea =
@@ -228,9 +259,9 @@ class ConnectionFlow {
     )?.set;
 
     if (textarea.tagName === 'TEXTAREA' && nativeSetter) {
-      nativeSetter.call(textarea, NOTE_MESSAGE);
+      nativeSetter.call(textarea, message);
     } else {
-      textarea.textContent = NOTE_MESSAGE;
+      textarea.textContent = message;
     }
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
     textarea.dispatchEvent(new Event('change', { bubbles: true }));
@@ -295,7 +326,7 @@ class ConnectionFlow {
     const addedNote = await this.tryClickAddNote();
 
     if (addedNote) {
-      const sent = await this.typeNoteAndSend();
+      const sent = await this.typeNoteAndSend(inviteName);
       if (sent) return { status: 'sent_with_note', name: inviteName };
       this.closeModalIfAny();
       return { status: 'skip', reason: 'note modal failed', name: inviteName };
@@ -311,6 +342,7 @@ class ConnectionFlow {
   }
 
   async run() {
+    ensureWidget();
     await this.init();
     this.running = true;
     this.stopped = false;
@@ -320,7 +352,7 @@ class ConnectionFlow {
     await saveState({ status: 'running', cooldownUntil: 0 });
 
     while (this.running && !this.stopped) {
-      if (this.dailyCount >= CONFIG.DAILY_CAP) {
+      if (this.dailyCount >= this.dailyCap) {
         this.log('daily cap reached — stopping');
         await saveState({ status: 'cap', cooldownUntil: 0 });
         break;
@@ -405,6 +437,98 @@ class ConnectionFlow {
   }
 }
 
+// ============ In-page floating status widget ============
+const WIDGET_LABELS = {
+  idle: 'Idle',
+  running: 'Running',
+  cooling: 'Cooling',
+  stopped: 'Stopped',
+  cap: 'Cap reached'
+};
+
+let widgetHost = null;
+let widgetShadow = null;
+let widgetEls = null;
+let widgetInterval = null;
+
+function ensureWidget() {
+  if (widgetHost && document.contains(widgetHost)) return;
+  widgetHost = document.createElement('div');
+  widgetHost.id = 'cf-widget-host';
+  widgetHost.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:2147483647;';
+  widgetShadow = widgetHost.attachShadow({ mode: 'open' });
+  widgetShadow.innerHTML = `
+    <style>
+      .w { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:#ffffff; color:#1a1d2e; border:1px solid #dde2ec; border-radius:12px; padding:10px 12px; min-width:150px; box-shadow:0 8px 24px rgba(0,0,0,0.12); font-size:12px; }
+      .row { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+      .dot { width:8px; height:8px; border-radius:50%; background:#8a90a8; }
+      .dot.running { background:#2e7d32; animation:pulse 1.4s ease-in-out infinite; }
+      .dot.cooling { background:#c9960a; animation:pulse 1s ease-in-out infinite; }
+      .dot.cap { background:#c62828; }
+      .status { font-weight:700; font-size:12px; }
+      .count { font-size:11px; color:#5a6078; margin-bottom:6px; font-variant-numeric:tabular-nums; }
+      .cooldown { font-size:11px; color:#c9960a; margin-bottom:6px; font-variant-numeric:tabular-nums; }
+      .hidden { display:none !important; }
+      button { width:100%; border:none; border-radius:6px; padding:6px 8px; background:linear-gradient(135deg,#c62828,#e53935); color:#fff; font-weight:700; font-size:12px; cursor:pointer; }
+      button:disabled { opacity:0.4; cursor:not-allowed; }
+      @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+    </style>
+    <div class="w">
+      <div class="row"><span class="dot" id="dot"></span><span class="status" id="status">Idle</span></div>
+      <div class="count" id="count">0 / 35</div>
+      <div class="cooldown hidden" id="cooldown">--s</div>
+      <button id="stop">Stop</button>
+    </div>
+  `;
+  document.documentElement.appendChild(widgetHost);
+  widgetEls = {
+    dot: widgetShadow.getElementById('dot'),
+    status: widgetShadow.getElementById('status'),
+    count: widgetShadow.getElementById('count'),
+    cooldown: widgetShadow.getElementById('cooldown'),
+    stop: widgetShadow.getElementById('stop')
+  };
+  widgetEls.stop.addEventListener('click', () => {
+    if (flow) flow.stop();
+  });
+  if (!widgetInterval) {
+    widgetInterval = setInterval(updateWidget, 800);
+  }
+}
+
+async function updateWidget() {
+  if (!widgetHost || !widgetEls) return;
+  let flowState = null, dailyCount = 0, dailyDate = '', settings = null;
+  try {
+    const res = await chrome.storage.local.get(['flowState','dailyCount','dailyDate','settings']);
+    flowState = res.flowState || null;
+    dailyCount = res.dailyCount || 0;
+    dailyDate = res.dailyDate || '';
+    settings = res.settings || null;
+  } catch (e) { return; }
+  const state = { status:'idle', cooldownUntil:0, totalSent:0, ...(flowState||{}) };
+  const today = new Date().toDateString();
+  const tc = dailyDate === today ? dailyCount : 0;
+  const cap = (settings && settings.dailyCap) ? settings.dailyCap : CONFIG.DAILY_CAP;
+  widgetEls.status.textContent = WIDGET_LABELS[state.status] || state.status;
+  widgetEls.dot.className = 'dot ' + state.status;
+  widgetEls.count.textContent = `${tc} / ${cap}`;
+  if (state.cooldownUntil && state.cooldownUntil > Date.now()) {
+    widgetEls.cooldown.classList.remove('hidden');
+    widgetEls.cooldown.textContent = 'Cooling: ' + Math.ceil((state.cooldownUntil-Date.now())/1000) + 's';
+  } else {
+    widgetEls.cooldown.classList.add('hidden');
+  }
+  widgetEls.stop.disabled = state.status === 'idle' || state.status === 'stopped' || state.status === 'cap';
+  widgetHost.style.display = (state.status === 'idle') ? 'none' : 'block';
+}
+
+function removeWidget() {
+  if (widgetInterval) { clearInterval(widgetInterval); widgetInterval = null; }
+  if (widgetHost) { widgetHost.remove(); widgetHost = null; widgetShadow = null; widgetEls = null; }
+}
+
+// ---------- Message bridge ----------
 // ---------- Message bridge ----------
 let flow = null;
 
