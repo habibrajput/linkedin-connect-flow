@@ -23,6 +23,7 @@ const noteInput = document.getElementById("note-input");
 const noteCount = document.getElementById("note-count");
 const capInput = document.getElementById("cap-input");
 const saveSettingsBtn = document.getElementById("save-settings");
+const resumeBtn = document.getElementById("resume");
 const resetStatsBtn = document.getElementById("reset-stats");
 const settingsStatus = document.getElementById("settings-status");
 
@@ -101,11 +102,13 @@ async function refresh() {
   const [
     { flowState },
     { dailyCount, dailyDate },
-    { settings }
+    { settings },
+    { flowResumeUrl }
   ] = await Promise.all([
     chrome.storage.local.get("flowState"),
     chrome.storage.local.get(["dailyCount", "dailyDate"]),
-    chrome.storage.local.get("settings")
+    chrome.storage.local.get("settings"),
+    chrome.storage.local.get("flowResumeUrl")
   ]);
 
   if (settings && settings.dailyCap) {
@@ -151,25 +154,59 @@ async function refresh() {
 
   document.getElementById("start").disabled = state.status === "running" || state.status === "cooling";
   document.getElementById("stop").disabled = state.status === "idle" || state.status === "stopped" || state.status === "cap";
+  if (resumeBtn) resumeBtn.disabled = !flowResumeUrl || todayCount >= dailyCap;
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.action === "FLOW_STATE_PUSH") refresh();
 });
 
-document.getElementById("start").addEventListener("click", () => {
+const startBtn = document.getElementById("start");
+const stopBtn = document.getElementById("stop");
+
+startBtn.addEventListener("click", () => {
+  const icon = startBtn.querySelector(".btn-icon");
+  const label = startBtn.querySelector("span:last-child");
+  const prevIcon = icon ? icon.textContent : "";
+  const prevLabel = label ? label.textContent : "";
+  if (icon) icon.textContent = "⏳";
+  if (label) label.textContent = "Starting…";
+  startBtn.disabled = true;
   chrome.runtime.sendMessage({ action: "START" }, (resp) => {
-    if (chrome.runtime.lastError) { console.error("[popup] START error:", chrome.runtime.lastError.message); return; }
+    if (chrome.runtime.lastError) { console.error("[popup] START error:", chrome.runtime.lastError.message); }
     if (resp && !resp.ok) console.error("[popup] START:", resp.error);
-    setTimeout(refresh, 200);
+    setTimeout(() => {
+      if (icon) icon.textContent = prevIcon || "▶";
+      if (label) label.textContent = prevLabel || "Start";
+      refresh();
+    }, 200);
   });
 });
 
-document.getElementById("stop").addEventListener("click", () => {
+stopBtn.addEventListener("click", () => {
+  const icon = stopBtn.querySelector(".btn-icon");
+  const label = stopBtn.querySelector("span:last-child");
+  const prevIcon = icon ? icon.textContent : "";
+  const prevLabel = label ? label.textContent : "";
+  if (icon) icon.textContent = "⏳";
+  if (label) label.textContent = "Stopping…";
+  stopBtn.disabled = true;
   chrome.runtime.sendMessage({ action: "STOP" }, (resp) => {
-    if (chrome.runtime.lastError) { console.error("[popup] STOP error:", chrome.runtime.lastError.message); return; }
+    if (chrome.runtime.lastError) { console.error("[popup] STOP error:", chrome.runtime.lastError.message); }
     if (resp && !resp.ok) console.error("[popup] STOP:", resp.error);
-    setTimeout(refresh, 200);
+    setTimeout(() => {
+      if (icon) icon.textContent = prevIcon || "■";
+      if (label) label.textContent = prevLabel || "Stop";
+      refresh();
+    }, 200);
+  });
+});
+
+if (resumeBtn) resumeBtn.addEventListener("click", async () => {
+  chrome.runtime.sendMessage({ action: "RESUME" }, (resp) => {
+    if (chrome.runtime.lastError) { console.error("[popup] RESUME error:", chrome.runtime.lastError.message); return; }
+    if (resp && !resp.ok) console.error("[popup] RESUME:", resp.error);
+    setTimeout(refresh, 300);
   });
 });
 
@@ -202,12 +239,19 @@ saveSettingsBtn.addEventListener("click", async () => {
   refresh();
 });
 
+const openRecruiterSearchBtn = document.getElementById("open-recruiter-search");
+if (openRecruiterSearchBtn) openRecruiterSearchBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: "https://www.linkedin.com/search/results/people/?keywords=technical%20recruiter&origin=GLOBAL_SEARCH_HEADER" });
+});
+
 resetStatsBtn.addEventListener("click", async () => {
   if (!confirm("Reset all stats and daily count?")) return;
   await chrome.storage.local.set({
     flowState: { status: "idle", cooldownUntil: 0, lastAction: null, lastActions: [], totalSent: 0, totalNotes: 0, totalBlank: 0, totalSkipped: 0 },
     dailyCount: 0,
-    dailyDate: new Date().toDateString()
+    dailyDate: new Date().toDateString(),
+    flowResumeUrl: null,
+    actionHistory: []
   });
   settingsStatus.style.color = "#2e7d32";
   settingsStatus.textContent = "Stats reset";

@@ -6,7 +6,7 @@ const CONFIG = {
   JITTER_MS: 6000,
   DAILY_CAP: 35,
   MODAL_WAIT_MS: 900,
-  AFTER_SEND_MS: 600,
+  AFTER_SEND_MS: 2000,
   SCROLL_WAIT_MS: 1500,
   MAX_CONSECUTIVE_SKIPS: 10
 };
@@ -63,10 +63,22 @@ function findDismissButton() {
 }
 
 function fireClick(el) {
+  try {
+    el.click();
+    return;
+  } catch (e) {}
   ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
     const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
     el.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, view: window }));
   });
+}
+
+function isExtensionContextValid() {
+  try {
+    return !!chrome && !!chrome.runtime && !!chrome.runtime.id;
+  } catch (e) {
+    return false;
+  }
 }
 
 // ============ Analytics state ============
@@ -83,31 +95,42 @@ const DEFAULT_STATE = {
 };
 
 async function loadState() {
-  const { flowState } = await chrome.storage.local.get("flowState");
-  const base = { ...DEFAULT_STATE, ...(flowState || {}) };
-  if ((!base.lastActions || !base.lastActions.length) && base.lastAction) {
-    base.lastActions = [base.lastAction];
+  if (!isExtensionContextValid()) return { ...DEFAULT_STATE };
+  try {
+    const { flowState } = await chrome.storage.local.get("flowState");
+    const base = { ...DEFAULT_STATE, ...(flowState || {}) };
+    if ((!base.lastActions || !base.lastActions.length) && base.lastAction) {
+      base.lastActions = [base.lastAction];
+    }
+    if (!Array.isArray(base.lastActions)) base.lastActions = [];
+    base.lastActions = base.lastActions.slice(-6);
+    return base;
+  } catch (e) {
+    console.error('[ConnectFlow] loadState error:', e);
+    return { ...DEFAULT_STATE };
   }
-  if (!Array.isArray(base.lastActions)) base.lastActions = [];
-  base.lastActions = base.lastActions.slice(-6);
-  return base;
 }
 
 async function saveState(patch) {
-  const current = await loadState();
-  const next = { ...current, ...patch };
-  if (patch && patch.lastAction) {
-    const arr = Array.isArray(current.lastActions) ? [...current.lastActions] : [];
-    arr.push(patch.lastAction);
-    next.lastActions = arr.slice(-6);
-  }
-  if (!Array.isArray(next.lastActions)) next.lastActions = [];
-  next.lastActions = next.lastActions.slice(-6);
-  await chrome.storage.local.set({ flowState: next });
+  if (!isExtensionContextValid()) return;
   try {
-    chrome.runtime.sendMessage({ action: "FLOW_STATE_UPDATE", state: next });
-  } catch (e) {}
-  return next;
+    const current = await loadState();
+    const next = { ...current, ...patch };
+    if (patch && patch.lastAction) {
+      const arr = Array.isArray(current.lastActions) ? [...current.lastActions] : [];
+      arr.push(patch.lastAction);
+      next.lastActions = arr.slice(-6);
+    }
+    if (!Array.isArray(next.lastActions)) next.lastActions = [];
+    next.lastActions = next.lastActions.slice(-6);
+    await chrome.storage.local.set({ flowState: next });
+    try {
+      chrome.runtime.sendMessage({ action: "FLOW_STATE_UPDATE", state: next });
+    } catch (e) {}
+    return next;
+  } catch (e) {
+    console.error('[ConnectFlow] saveState error:', e);
+  }
 }
 
 // ============ Flow class ============
@@ -120,41 +143,53 @@ class ConnectionFlow {
     this.dailyCount = 0;
     this.dailyDate = "";
     this._skips = 0;
+    this.processed = new Set();
     this.dailyCap = CONFIG.DAILY_CAP;
     this.noteMessage = NOTE_MESSAGE;
   }
 
   async init() {
-    const data = await chrome.storage.local.get(["actionHistory", "dailyCount", "dailyDate", "settings"]);
-    this.history = data.actionHistory || [];
-    this.dailyDate = data.dailyDate || "";
-    this.dailyCount = data.dailyCount || 0;
-    if (data.settings) {
-      if (data.settings.dailyCap) this.dailyCap = data.settings.dailyCap;
-      if (data.settings.noteMessage) this.noteMessage = data.settings.noteMessage;
-    }
+    if (!isExtensionContextValid()) return;
+    try {
+      const data = await chrome.storage.local.get(["actionHistory", "dailyCount", "dailyDate", "settings"]);
+      this.history = (data.actionHistory || []).map(Number).filter(Number.isFinite);
+      this.dailyDate = data.dailyDate || "";
+      this.dailyCount = data.dailyCount || 0;
+      if (data.settings) {
+        if (data.settings.dailyCap) this.dailyCap = data.settings.dailyCap;
+        if (data.settings.noteMessage) this.noteMessage = data.settings.noteMessage;
+      }
 
-    const today = new Date().toDateString();
-    if (this.dailyDate !== today) {
-      this.dailyDate = today;
-      this.dailyCount = 0;
-      await this.persist();
+      const today = new Date().toDateString();
+      if (this.dailyDate !== today) {
+        this.dailyDate = today;
+        this.dailyCount = 0;
+        this.history = [];
+        await this.persist();
+      }
+    } catch (e) {
+      console.error('[ConnectFlow] init error:', e);
     }
   }
 
   async persist() {
-    await chrome.storage.local.set({
-      actionHistory: this.history,
-      dailyCount: this.dailyCount,
-      dailyDate: this.dailyDate
-    });
+    if (!isExtensionContextValid()) return;
+    try {
+      await chrome.storage.local.set({
+        actionHistory: this.history,
+        dailyCount: this.dailyCount,
+        dailyDate: this.dailyDate
+      });
+    } catch (e) {
+      console.error('[ConnectFlow] persist error:', e);
+    }
   }
 
   sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   canActNow() {
     const now = Date.now();
-    this.history = this.history.filter(t => now - t < 60000);
+    this.history = (this.history || []).map(Number).filter(Number.isFinite).filter(t => now - t < 60000);
     if (this.history.length >= CONFIG.MAX_PER_MINUTE) return false;
     const last = this.history[this.history.length - 1] || 0;
     return (now - last) >= CONFIG.MIN_GAP_MS;
@@ -162,31 +197,83 @@ class ConnectionFlow {
 
   msUntilNextAllowed() {
     const now = Date.now();
-    const last = this.history[this.history.length - 1] || 0;
+    const hist = (this.history || []).map(Number).filter(Number.isFinite);
+    const last = hist[hist.length - 1] || 0;
     const gapWait = Math.max(0, CONFIG.MIN_GAP_MS - (now - last));
-    this.history = this.history.filter(t => now - t < 60000);
-    if (this.history.length >= CONFIG.MAX_PER_MINUTE) {
-      const oldest = this.history[0];
+    const recent = hist.filter(t => now - t < 60000);
+    if (recent.length >= CONFIG.MAX_PER_MINUTE) {
+      const oldest = recent[0];
       return Math.max(gapWait, 60000 - (now - oldest));
     }
     return gapWait;
   }
 
+  isPremiumUpsellVisible() {
+    const text = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase();
+    return /reactivate premium|send unlimited.*premium|weekly invitation limit|you'?ve reached.*limit|premium subscribers have|more connections on average/i.test(text);
+  }
+
   findConnectButton() {
-    const anchors = document.querySelectorAll('a[aria-label]');
-    for (const el of anchors) {
+    const candidates = document.querySelectorAll('button, a, [role="button"]');
+    for (const el of candidates) {
       const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-      if (!/^invite .+ to connect$/.test(aria)) continue;
+      const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+      const hay = (aria + ' ' + text).trim();
+      if (!hay) continue;
+      if (/pending|following|message|more|dismiss|close/.test(hay)) continue;
+
+      const isConnect =
+        /^invite .+ to connect$/.test(aria) ||
+        /^connect(\b| with)/.test(aria) ||
+        aria === 'connect' ||
+        text === 'connect' ||
+        text.startsWith('connect ');
+
+      if (!isConnect) continue;
+
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) continue;
-      if (el.offsetParent === null) continue;
-      const ownText = (el.innerText || '').trim().toLowerCase();
-      if (/pending|following/.test(ownText)) continue;
+      if (el.offsetParent === null && el.getClientRects().length === 0) continue;
       return el;
     }
     return null;
   }
 
+  extractRecruiterContext(btn, name) {
+    const ctx = { title: '', company: '', headline: '' };
+    try {
+      let card = btn.closest('li') || btn.closest('[data-view-name]') || btn.closest('article') || btn.parentElement;
+      // walk up a bit to find card with subtitles
+      for (let i = 0; i < 6 && card && card !== document.body && card.parentElement; i++) {
+        if (card.querySelector && (card.querySelector('.entity-result__primary-subtitle') || card.querySelector('.entity-result__secondary-subtitle'))) break;
+        card = card.parentElement;
+      }
+      if (card && card.querySelector) {
+        const primary = card.querySelector('.entity-result__primary-subtitle, [class*="primary-subtitle"], [class*="subtitle"]');
+        const secondary = card.querySelector('.entity-result__secondary-subtitle, [class*="secondary-subtitle"]');
+        if (primary) ctx.title = (primary.innerText || '').trim();
+        if (secondary) ctx.company = (secondary.innerText || '').trim();
+      }
+      // Profile page fallbacks
+      if (!ctx.title) {
+        const headlineEl = document.querySelector('h2.text-body-medium, .text-body-medium.break-words, [class*="headline"]');
+        if (headlineEl) {
+          ctx.headline = (headlineEl.innerText || '').trim();
+          // split "Title at Company"
+          const m = ctx.headline.match(/^(.+?)\s+at\s+(.+)$/i);
+          if (m) { ctx.title = m[1].trim(); ctx.company = m[2].trim(); }
+          else ctx.title = ctx.headline;
+        }
+      }
+      // name fallback from h1
+      if (!name) {
+        const h1 = document.querySelector('h1');
+        if (h1) ctx.name = (h1.innerText || '').trim();
+      }
+    } catch (e) {}
+    // clean company location noise: keep first segment before · or comma? keep as-is
+    return ctx;
+  }
   findConnectButtonIn(root) {
     const anchors = root.querySelectorAll('a[aria-label]');
     for (const el of anchors) {
@@ -200,9 +287,9 @@ class ConnectionFlow {
   }
 
   findSendButton() {
-    const btns = [...document.querySelectorAll('button')];
+    const btns = deepQueryAll('button');
     const plain = btns.find(b => {
-      if (b.offsetParent === null) return false;
+      if (b.offsetParent === null && b.getClientRects().length === 0) return false;
       const t = (b.innerText || '').trim().toLowerCase();
       return t === 'send' || t === 'send without a note';
     });
@@ -227,17 +314,25 @@ class ConnectionFlow {
     return true;
   }
 
-  async typeNoteAndSend(name = null) {
+  _premiumStop = false;
+
+  async typeNoteAndSend(name = null, context = {}) {
     // Resolve macros in the note template
     const fullName = (name || '').trim();
     const parts = fullName.split(/\s+/).filter(Boolean);
     const firstName = parts[0] || '';
     const lastName = parts.slice(1).join(' ') || '';
+    const title = (context.title || context.headline || '').trim();
+    const company = (context.company || '').trim();
+    const headline = (context.headline || context.title || '').trim();
     let message = this.noteMessage || '';
     message = message
       .replace(/\{firstName\}|\{first\}/gi, firstName)
       .replace(/\{lastName\}|\{last\}/gi, lastName)
-      .replace(/\{name\}|\{fullName\}/gi, fullName);
+      .replace(/\{name\}|\{fullName\}/gi, fullName)
+      .replace(/\{title\}|\{position\}|\{headline\}/gi, title || headline)
+      .replace(/\{company\}|\{organization\}/gi, company)
+      .replace(/\{headline\}/gi, headline);
     this._resolvedNote = message;
     let textarea = null;
     for (let i = 0; i < 15; i++) {
@@ -284,6 +379,10 @@ class ConnectionFlow {
       this.log('Send button not found in shadow DOM');
       return false;
     }
+    if (this.isPremiumUpsellVisible()) {
+      this._premiumStop = true;
+      return false;
+    }
     this.log(`clicking send <${send.tagName} aria="${send.getAttribute('aria-label')}"> text="${(send.innerText || '').trim().slice(0, 40)}"`);
     fireClick(send);
     await this.sleep(600 + Math.random() * 500);
@@ -292,7 +391,13 @@ class ConnectionFlow {
 
   closeModalIfAny() {
     const dismiss = findDismissButton();
-    if (dismiss) fireClick(dismiss);
+    if (dismiss) { fireClick(dismiss); return; }
+    const btn = [...deepQueryAll('button')].find(b => {
+      const t = (b.innerText || '').trim().toLowerCase();
+      const a = (b.getAttribute('aria-label') || '').toLowerCase();
+      return /got it|dismiss|close|cancel/.test(t + ' ' + a);
+    });
+    if (btn) fireClick(btn);
   }
 
   async scrollToNext() {
@@ -300,44 +405,120 @@ class ConnectionFlow {
     await this.sleep(CONFIG.SCROLL_WAIT_MS + Math.random() * 1000);
   }
 
+  findNextPageButton() {
+    let btn = document.querySelector('button.artdeco-pagination__button--next');
+    if (btn && !btn.disabled) return btn;
+    const candidates = [...document.querySelectorAll('button, a')];
+    return candidates.find(el => {
+      if (el.disabled) return false;
+      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+      const text = (el.innerText || '').trim().toLowerCase();
+      return aria === 'next' || text === 'next' || aria.includes('next page');
+    }) || null;
+  }
+
+  async goToNextPage() {
+    const btn = this.findNextPageButton();
+    if (!btn || btn.disabled) return false;
+    this.log('clicking next page');
+    try { await chrome.storage.local.set({ autoContinueFlow: true }); } catch (e) {}
+    btn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    await this.sleep(500);
+    const before = location.href;
+    fireClick(btn);
+    for (let i = 0; i < 40; i++) {
+      await this.sleep(250);
+      if (location.href !== before) break;
+    }
+    await this.sleep(2000);
+    if (location.href === before) {
+      try { await chrome.storage.local.remove('autoContinueFlow'); } catch (e) {}
+    }
+    window.scrollTo(0, 0);
+    await this.sleep(1000);
+    return true;
+  }
+
   async processOne() {
     const btn = this.findConnectButton();
     if (!btn) return { status: 'skip', reason: 'no connect button visible' };
 
+    this._premiumStop = false;
+
     btn.scrollIntoView({ block: 'center', behavior: 'smooth' });
     await this.sleep(600 + Math.random() * 500);
 
-    const nameMatch = (btn.getAttribute('aria-label') || '').match(/^Invite (.+) to connect$/i);
-    const inviteName = nameMatch ? nameMatch[1] : null;
-
-    let liveBtn = null;
-    if (inviteName) {
-      liveBtn = [...document.querySelectorAll('a[aria-label]')].find(el => {
-        const a = (el.getAttribute('aria-label') || '').toLowerCase();
-        return a === `invite ${inviteName.toLowerCase()} to connect`;
-      });
+    const aria = btn.getAttribute('aria-label') || '';
+    let inviteName = null;
+    let m = aria.match(/^Invite (.+) to connect$/i);
+    if (m) inviteName = m[1].trim();
+    if (!inviteName) {
+      m = aria.match(/^Connect with (.+)$/i);
+      if (m) inviteName = m[1].trim();
     }
-    if (!liveBtn) liveBtn = this.findConnectButton();
+    if (!inviteName) {
+      // try nearest result card name
+      const card = btn.closest('li, div[data-chameleon-result-urn], .reusable-search__result-container, .entity-result');
+      if (card) {
+        const nameEl = card.querySelector('.entity-result__title-text a, a.app-aware-link span[aria-hidden="true"], span[aria-hidden="true"]');
+        if (nameEl) inviteName = (nameEl.innerText || nameEl.textContent || '').trim();
+      }
+    }
+    if (!inviteName) {
+      inviteName = aria.trim() || (btn.innerText || '').trim() || null;
+    }
+
+    const procKey = inviteName || (btn.getAttribute('aria-label') || '').trim() || (btn.innerText || '').trim();
+    if (procKey && this.processed.has(procKey)) {
+      return { status: 'skip', reason: 'already processed', name: inviteName };
+    }
+
+    const context = this.extractRecruiterContext(btn, inviteName);
+
+    let liveBtn = this.findConnectButton();
     if (!liveBtn) return { status: 'skip', reason: 'button disappeared on re-render', name: inviteName };
 
-    fireClick(liveBtn);
+    liveBtn.click();
     await this.sleep(CONFIG.MODAL_WAIT_MS + Math.random() * 600);
 
-    const addedNote = await this.tryClickAddNote();
+    if (this.isPremiumUpsellVisible()) {
+      this.closeModalIfAny();
+      return { status: 'stop', reason: 'premium required / invitation limit reached', name: inviteName };
+    }
+
+    const wantsNote = !!(this.noteMessage && this.noteMessage.trim());
+    const addedNote = wantsNote ? await this.tryClickAddNote() : false;
 
     if (addedNote) {
-      const sent = await this.typeNoteAndSend(inviteName);
-      if (sent) return { status: 'sent_with_note', name: inviteName };
+      if (this.isPremiumUpsellVisible()) {
+        this.closeModalIfAny();
+        return { status: 'stop', reason: 'premium required / invitation limit reached', name: inviteName };
+      }
+      const sent = await this.typeNoteAndSend(inviteName, context);
+      if (this._premiumStop) {
+        this.closeModalIfAny();
+        return { status: 'stop', reason: 'premium required / invitation limit reached', name: inviteName };
+      }
+      if (sent) {
+        if (procKey) this.processed.add(procKey);
+        return { status: 'sent_with_note', name: inviteName };
+      }
       this.closeModalIfAny();
       return { status: 'skip', reason: 'note modal failed', name: inviteName };
     }
 
     const sendBtn = this.findSendButton();
     if (sendBtn) {
+      if (this.isPremiumUpsellVisible()) {
+        this.closeModalIfAny();
+        return { status: 'stop', reason: 'premium required / invitation limit reached', name: inviteName };
+      }
       fireClick(sendBtn);
       await this.sleep(CONFIG.AFTER_SEND_MS + Math.random() * 500);
+      if (procKey) this.processed.add(procKey);
       return { status: 'sent', name: inviteName };
     }
+    if (procKey) this.processed.add(procKey);
     return { status: 'clicked', name: inviteName };
   }
 
@@ -351,22 +532,25 @@ class ConnectionFlow {
 
     await saveState({ status: 'running', cooldownUntil: 0 });
 
-    while (this.running && !this.stopped) {
+    while (this.running && !this.stopped && isExtensionContextValid()) {
       if (this.dailyCount >= this.dailyCap) {
         this.log('daily cap reached — stopping');
-        await saveState({ status: 'cap', cooldownUntil: 0 });
+        const resumeUrl = window.location.href;
+        try { await chrome.storage.local.set({ flowResumeUrl: resumeUrl }); } catch (e) {}
+        await saveState({ status: 'cap', cooldownUntil: 0, resumeUrl });
         break;
       }
 
       // Cooldown / rate-limit wait — push live updates so popup shows countdown
       while (!this.canActNow()) {
         if (this.stopped) break;
-        const wait = this.msUntilNextAllowed() + Math.random() * CONFIG.JITTER_MS;
+        let wait = this.msUntilNextAllowed() + Math.random() * CONFIG.JITTER_MS;
+        if (!Number.isFinite(wait) || wait < 1000) wait = 5000;
+        wait = Math.min(wait, 70000);
         const until = Date.now() + wait;
         this.log(`rate-limit wait ${Math.round(wait / 1000)}s`);
         await saveState({ status: 'cooling', cooldownUntil: until });
 
-        // Sleep in 1s ticks so popup can re-read cooldownUntil if it reopens
         const end = Date.now() + wait;
         while (Date.now() < end && !this.stopped) {
           await this.sleep(Math.min(1000, end - Date.now()));
@@ -376,8 +560,23 @@ class ConnectionFlow {
 
       await saveState({ status: 'running', cooldownUntil: 0 });
 
+      if (!this.findConnectButton()) {
+        this.log('no connect button on this page');
+        const moved = await this.goToNextPage();
+        if (moved) { this._skips = 0; continue; }
+        this.log('no next page available — stopping');
+        await saveState({ status: 'stopped', cooldownUntil: 0, resumeUrl: window.location.href });
+        break;
+      }
+
       const result = await this.processOne();
       this.log('result: ' + JSON.stringify(result));
+
+      if (result.status === 'stop') {
+        this.log('stopping: ' + (result.reason || 'premium/limit'));
+        await saveState({ status: 'stopped', cooldownUntil: 0, resumeUrl: window.location.href, lastAction: { ts: Date.now(), result: 'stopped: ' + (result.reason || 'premium/limit'), name: result.name || null } });
+        break;
+      }
 
       const sentOk =
         result.status === 'sent' ||
@@ -399,6 +598,9 @@ class ConnectionFlow {
           totalNotes: state.totalNotes + (result.status === 'sent_with_note' ? 1 : 0),
           totalBlank: state.totalBlank + (result.status === 'sent_with_note' ? 0 : 1)
         });
+      } else if (result.reason === 'already processed') {
+        this.log('already processed — scrolling past');
+        await this.scrollToNext();
       } else {
         this._skips++;
         const state = await loadState();
@@ -409,7 +611,7 @@ class ConnectionFlow {
 
         if (this._skips >= CONFIG.MAX_CONSECUTIVE_SKIPS) {
           this.log(`${CONFIG.MAX_CONSECUTIVE_SKIPS} consecutive skips — stopping`);
-          await saveState({ status: 'stopped', cooldownUntil: 0 });
+          await saveState({ status: 'stopped', cooldownUntil: 0, resumeUrl: window.location.href });
           break;
         }
       }
@@ -424,12 +626,13 @@ class ConnectionFlow {
 
     this.log('stopped');
     this.running = false;
-    await saveState({ status: 'stopped', cooldownUntil: 0 });
+    await saveState({ status: 'stopped', cooldownUntil: 0, resumeUrl: window.location.href });
   }
 
   stop() {
     this.stopped = true;
     this.running = false;
+    try { chrome.storage.local.set({ autoContinueFlow: false }); } catch (e) {}
   }
 
   log(msg) {
@@ -528,17 +731,41 @@ function removeWidget() {
   if (widgetHost) { widgetHost.remove(); widgetHost = null; widgetShadow = null; widgetEls = null; }
 }
 
-// ---------- Message bridge ----------
-// ---------- Message bridge ----------
 let flow = null;
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'START') {
     if (!flow) flow = new ConnectionFlow();
-    flow.run();
+    flow.run().catch(e => console.error('[ConnectFlow] run error:', e));
     sendResponse({ ok: true, state: 'running' });
   } else if (msg.action === 'STOP') {
     if (flow) flow.stop();
     sendResponse({ ok: true, state: 'stopped' });
+  } else if (msg.action === 'RESUME') {
+    (async () => {
+      const { flowResumeUrl } = await chrome.storage.local.get('flowResumeUrl');
+      const target = flowResumeUrl || window.location.href;
+      if (window.location.href !== target) {
+        try { await chrome.storage.local.set({ autoContinueFlow: true }); } catch (e) {}
+        window.location.href = target;
+      } else {
+        await chrome.storage.local.remove('autoContinueFlow');
+        if (!flow) flow = new ConnectionFlow();
+        flow.run().catch(e => console.error('[ConnectFlow] run error:', e));
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
   }
 });
+// Auto-continue after pagination navigation or resume
+(async () => {
+  try {
+    const { autoContinueFlow } = await chrome.storage.local.get('autoContinueFlow');
+    if (autoContinueFlow) {
+      await chrome.storage.local.remove('autoContinueFlow');
+      if (!flow) flow = new ConnectionFlow();
+      flow.run().catch(e => console.error('[ConnectFlow] run error:', e));
+    }
+  } catch (e) {}
+})();
